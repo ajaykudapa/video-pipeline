@@ -1,8 +1,8 @@
 # Distributed Video Processing Platform
 
 A cloud-native platform that accepts large video uploads, stores them in
-S3-compatible object storage, fans processing out into independent tasks on a
-message queue, and executes them across a horizontally scalable, fault-tolerant
+S3-compatible object storage and processes into independent tasks on a
+message queue. Executes them across a horizontally scalable, fault-tolerant
 worker fleet — with live progress via SSE and full observability through
 Prometheus + Grafana.
 
