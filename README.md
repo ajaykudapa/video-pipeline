@@ -109,23 +109,3 @@ infra/        prometheus, grafana provisioning, rabbitmq plugins
 tests/        unit tests (pure logic + state machine, fakeredis)
 scripts/      end-to-end smoke test
 ```
-
-## Design decisions & trade-offs (interview fodder)
-
-- **Why a queue instead of HTTP calls to workers?** Decouples producers from
-  consumers, absorbs bursts, gives free load balancing, retry semantics, and
-  backpressure visibility (queue depth *is* the autoscaling signal).
-- **Why per-task messages instead of one message per video?** Independent
-  tasks parallelize across workers, fail independently, and retry independently;
-  a 4K transcode failure doesn't force re-running the thumbnail.
-- **Why Redis for state but RabbitMQ for work?** Different jobs: the queue is
-  a durable work buffer; Redis is fast mutable state + pub/sub fan-out for SSE.
-- **Why presign URLs with a separate public endpoint?** Presigned URLs embed
-  the signed host; the browser can't resolve the internal Docker hostname.
-- **Known limits (be honest in interviews):** counter updates in Redis are not
-  transactional with queue acks (a crash between them can under-count); MinIO
-  and Redis are single-node here; the metadata task could inform the transcode
-  plan (e.g., skip 1080p for 480p sources) but currently doesn't; large-file
-  uploads still transit the API rather than going direct-to-storage with
-  presigned multipart PUTs.
-```
