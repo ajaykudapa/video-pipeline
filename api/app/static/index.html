@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Pipeline</title>
+<style>
+  :root { --bg:#0f1420; --card:#1a2233; --line:#2a3550; --text:#e8edf6;
+          --dim:#8ea0bf; --accent:#5b9bff; --ok:#3ecf8e; --err:#ff6b6b; --warn:#f5b942; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,sans-serif;
+         background:var(--bg); color:var(--text); }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 20px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 24px; font-size:13px; }
+  .drop { border:2px dashed var(--line); border-radius:12px; padding:36px;
+          text-align:center; color:var(--dim); cursor:pointer; transition:.15s; }
+  .drop:hover, .drop.over { border-color:var(--accent); color:var(--text); }
+  .drop input { display:none; }
+  .jobs { margin-top:28px; display:flex; flex-direction:column; gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line);
+          border-radius:12px; padding:16px 18px; }
+  .row { display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
+  .fname { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .status { font-size:12px; color:var(--dim); }
+  .status.completed { color:var(--ok); }
+  .status.completed_with_errors { color:var(--warn); }
+  .bar { height:6px; background:var(--line); border-radius:3px; margin:10px 0 12px; overflow:hidden; }
+  .bar i { display:block; height:100%; width:0; background:var(--accent);
+           border-radius:3px; transition:width .4s; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { font-size:12px; padding:3px 10px; border-radius:99px;
+          border:1px solid var(--line); color:var(--dim); text-decoration:none; }
+  .chip.running { border-color:var(--accent); color:var(--accent); }
+  .chip.done { border-color:var(--ok); color:var(--ok); }
+  a.chip.done:hover { background:rgba(62,207,142,.12); }
+  .chip.failed { border-color:var(--err); color:var(--err); }
+  .id { font-family:ui-monospace,monospace; font-size:11px; color:var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Distributed Video Processing Platform</h1>
+  <p class="sub">Upload a video &rarr; it is stored in object storage, split into tasks,
+     and processed by a scalable worker fleet. Progress streams live below.</p>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="video/*">
+    <span id="dropText">Drop a video here or click to choose</span>
+  </label>
+
+  <div class="jobs" id="jobs"></div>
+</div>
+
+<script>
+const $jobs = document.getElementById('jobs');
+const $file = document.getElementById('file');
+const $drop = document.getElementById('drop');
+const $dropText = document.getElementById('dropText');
+const TASK_LABELS = { transcode_1080p:'1080p', transcode_720p:'720p',
+                      thumbnail:'thumbnail', preview_clip:'preview', metadata:'metadata' };
+
+async function refresh() {
+  const jobs = await (await fetch('/api/jobs')).json();
+  $jobs.innerHTML = '';
+  for (const j of jobs) $jobs.appendChild(renderJob(j));
+}
+
+function renderJob(j) {
+  const total = +j.total_tasks, done = +j.done_tasks, failed = +j.failed_tasks;
+  const pct = total ? Math.round(100 * (done + failed) / total) : 0;
+  const el = document.createElement('div');
+  el.className = 'card'; el.id = 'job-' + j.id;
+  el.innerHTML = `
+    <div class="row">
+      <span class="fname">${esc(j.filename)}</span>
+      <span class="status ${j.status}" data-status>${j.status} · ${pct}%</span>
+    </div>
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    <div class="chips" data-chips></div>
+    <div class="id">${j.id}</div>`;
+  const chips = el.querySelector('[data-chips]');
+  for (const [tid, t] of Object.entries(j.tasks || {})) {
+    const a = document.createElement(t.status === 'done' ? 'a' : 'span');
+    a.className = 'chip ' + t.status;
+    a.dataset.taskId = tid;
+    a.textContent = TASK_LABELS[t.type] || t.type;
+    if (t.status === 'done') { a.href = '/api/jobs/' + j.id; a.dataset.pending = '1'; }
+    chips.appendChild(a);
+  }
+  // Swap chip hrefs for presigned URLs lazily
+  if (el.querySelector('[data-pending]')) hydrateLinks(j.id);
+  return el;
+}
+
+async function hydrateLinks(jobId) {
+  const j = await (await fetch('/api/jobs/' + jobId)).json();
+  for (const [tid, t] of Object.entries(j.tasks || {})) {
+    const chip = document.querySelector(`#job-${jobId} [data-task-id="${CSS.escape(tid)}"]`);
+    if (chip && t.download_url) { chip.href = t.download_url; chip.target = '_blank'; }
+  }
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+// ---- upload ----
+$drop.addEventListener('dragover', e => { e.preventDefault(); $drop.classList.add('over'); });
+$drop.addEventListener('dragleave', () => $drop.classList.remove('over'));
+$drop.addEventListener('drop', e => {
+  e.preventDefault(); $drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+});
+$file.addEventListener('change', () => $file.files[0] && upload($file.files[0]));
+
+async function upload(f) {
+  $dropText.textContent = `Uploading ${f.name}…`;
+  const fd = new FormData(); fd.append('file', f);
+  const res = await fetch('/api/videos', { method:'POST', body: fd });
+  $dropText.textContent = res.ok ? 'Drop a video here or click to choose'
+                                 : 'Upload failed: ' + (await res.text());
+  refresh();
+}
+
+// ---- live progress via SSE ----
+const es = new EventSource('/api/events');
+es.onmessage = ev => {
+  const e = JSON.parse(ev.data);
+  const card = document.getElementById('job-' + e.job_id);
+  if (!card) { refresh(); return; }
+  const chip = card.querySelector(`[data-task-id="${CSS.escape(e.task_id)}"]`);
+  if (chip) chip.className = 'chip ' + (e.task_status === 'done' ? 'done' : e.task_status);
+  if (e.progress !== null) {
+    card.querySelector('.bar i').style.width = Math.round(e.progress * 100) + '%';
+    card.querySelector('[data-status]').textContent =
+      `${e.job_status} · ${Math.round(e.progress * 100)}%`;
+    card.querySelector('[data-status]').className = 'status ' + e.job_status;
+  }
+  if (e.task_status === 'done') hydrateLinks(e.job_id);
+};
+
+refresh();
+</script>
+</body>
+</html>
