@@ -30,7 +30,6 @@ echo "==> uploading..."
 JOB_ID=$(curl -fsS -X POST "$API/api/videos" -F "file=@$SAMPLE;type=video/mp4" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
 echo "    job: $JOB_ID"
-
 echo "==> waiting for processing..."
 for i in $(seq 1 90); do
   STATUS=$(curl -fsS "$API/api/jobs/$JOB_ID" \
